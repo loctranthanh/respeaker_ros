@@ -321,12 +321,12 @@ class RespeakerNode(object):
         self.prev_is_voice = None
         self.prev_doa = None
         # advertise
-        self.pub_vad = rospy.Publisher("is_speeching", Bool, queue_size=1, latch=True)
+        # self.pub_vad = rospy.Publisher("is_speeching", Bool, queue_size=1, latch=True)
         self.pub_doa_raw = rospy.Publisher("sound_direction", Int32, queue_size=1, latch=True)
         self.pub_doa = rospy.Publisher("sound_localization", PoseStamped, queue_size=1, latch=True)
-        self.pub_audio = rospy.Publisher("audio", AudioData, queue_size=10)
+        # self.pub_audio = rospy.Publisher("audio", AudioData, queue_size=10)
         self.pub_speech_audio = rospy.Publisher("speech_audio", AudioData, queue_size=10)
-        self.pub_audios = {c:rospy.Publisher('audio/channel%d' % c, AudioData, queue_size=10) for c in self.respeaker_audio.channels}
+        # self.pub_audios = {c:rospy.Publisher('audio/channel%d' % c, AudioData, queue_size=10) for c in self.respeaker_audio.channels}
         # init config
         self.config = None
         self.dyn_srv = Server(RespeakerConfig, self.on_config)
@@ -377,9 +377,9 @@ class RespeakerNode(object):
                                        oneshot=True)
 
     def on_audio(self, data, channel):
-        self.pub_audios[channel].publish(AudioData(data=data))
+        # self.pub_audios[channel].publish(AudioData(data=data))
         if channel == self.main_channel:
-            self.pub_audio.publish(AudioData(data=data))
+            # self.pub_audio.publish(AudioData(data=data))
             if self.is_speeching:
                 if len(self.speech_audio_buffer) == 0:
                     self.speech_audio_buffer = self.speech_prefetch_buffer
@@ -397,26 +397,26 @@ class RespeakerNode(object):
         doa = math.degrees(doa_rad)
 
         # vad
-        if is_voice != self.prev_is_voice:
-            self.pub_vad.publish(Bool(data=is_voice))
-            self.prev_is_voice = is_voice
+        # if is_voice != self.prev_is_voice:
+        #     self.pub_vad.publish(Bool(data=is_voice))
+        #     self.prev_is_voice = is_voice
 
         # doa
         if doa != self.prev_doa:
             self.pub_doa_raw.publish(Int32(data=doa))
             self.prev_doa = doa
 
-            msg = PoseStamped()
-            msg.header.frame_id = self.sensor_frame_id
-            msg.header.stamp = stamp
-            ori = T.quaternion_from_euler(math.radians(doa), 0, 0)
-            msg.pose.position.x = self.doa_xy_offset * np.cos(doa_rad)
-            msg.pose.position.y = self.doa_xy_offset * np.sin(doa_rad)
-            msg.pose.orientation.w = ori[0]
-            msg.pose.orientation.x = ori[1]
-            msg.pose.orientation.y = ori[2]
-            msg.pose.orientation.z = ori[3]
-            self.pub_doa.publish(msg)
+            # msg = PoseStamped()
+            # msg.header.frame_id = self.sensor_frame_id
+            # msg.header.stamp = stamp
+            # ori = T.quaternion_from_euler(math.radians(doa), 0, 0)
+            # msg.pose.position.x = self.doa_xy_offset * np.cos(doa_rad)
+            # msg.pose.position.y = self.doa_xy_offset * np.sin(doa_rad)
+            # msg.pose.orientation.w = ori[0]
+            # msg.pose.orientation.x = ori[1]
+            # msg.pose.orientation.y = ori[2]
+            # msg.pose.orientation.z = ori[3]
+            # self.pub_doa.publish(msg)
 
         # speech audio
         if is_voice:

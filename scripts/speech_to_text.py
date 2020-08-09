@@ -6,9 +6,9 @@ import actionlib
 import rospy
 import speech_recognition as SR
 
-from actionlib_msgs.msg import GoalStatus, GoalStatusArray
+# from actionlib_msgs.msg import GoalStatus, GoalStatusArray
 from audio_common_msgs.msg import AudioData
-from sound_play.msg import SoundRequest, SoundRequestAction, SoundRequestGoal
+# from sound_play.msg import SoundRequest, SoundRequestAction, SoundRequestGoal
 from speech_recognition_msgs.msg import SpeechRecognitionCandidates
 
 
@@ -18,7 +18,7 @@ class SpeechToText(object):
         self.sample_rate = rospy.get_param("~sample_rate", 16000)
         self.sample_width = rospy.get_param("~sample_width", 2L)
         # language of STT service
-        self.language = rospy.get_param("~language", "ja-JP")
+        self.language = "vi-VN"
         # ignore voice input while the robot is speaking
         self.self_cancellation = rospy.get_param("~self_cancellation", True)
         # time to assume as SPEAKING after tts service is finished
@@ -30,18 +30,18 @@ class SpeechToText(object):
         self.tts_action = None
         self.last_tts = None
         self.is_canceling = False
-        if self.self_cancellation:
-            self.tts_action = actionlib.SimpleActionClient(
-                "sound_play", SoundRequestAction)
-            if self.tts_action.wait_for_server(rospy.Duration(5.0)):
-                self.tts_timer = rospy.Timer(rospy.Duration(0.1), self.tts_timer_cb)
-            else:
-                rospy.logerr("action '%s' is not initialized." % rospy.remap_name("sound_play"))
-                self.tts_action = None
+        # if self.self_cancellation:
+        #     self.tts_action = actionlib.SimpleActionClient(
+        #         "sound_play", SoundRequestAction)
+        #     if self.tts_action.wait_for_server(rospy.Duration(5.0)):
+        #         self.tts_timer = rospy.Timer(rospy.Duration(0.1), self.tts_timer_cb)
+        #     else:
+        #         rospy.logerr("action '%s' is not initialized." % rospy.remap_name("sound_play"))
+        #         self.tts_action = None
 
         self.pub_speech = rospy.Publisher(
             "speech_to_text", SpeechRecognitionCandidates, queue_size=1)
-        self.sub_audio = rospy.Subscriber("audio", AudioData, self.audio_cb)
+        self.sub_audio = rospy.Subscriber("speech_audio", AudioData, self.audio_cb)
 
     def tts_timer_cb(self, event):
         stamp = event.current_real
@@ -73,6 +73,7 @@ class SpeechToText(object):
                 data, language=self.language)
             msg = SpeechRecognitionCandidates(transcript=[result])
             self.pub_speech.publish(msg)
+            rospy.loginfo(result.encode('utf-8'))
         except SR.UnknownValueError as e:
             rospy.logerr("Failed to recognize: %s" % str(e))
         except SR.RequestError as e:

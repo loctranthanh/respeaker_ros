@@ -1,0 +1,22 @@
+(!less_than_int(1591061717, getprop("ro.build.date.utc"))) || abort("E3003: Can't install this package (Tue Jun  2 09:35:17 CST 2020) over newer build (" + getprop("ro.build.date") + ").");
+getprop("ro.product.device") == "px30_evb" || abort("E3004: This package is for \"px30_evb\" devices; this is a \"" + getprop("ro.product.device") + "\".");
+ui_print("Target: OPM8.190505.001/V4.400.13B8002.0.R.20200602:userdebug/test-keys");
+show_progress(0.550000, 0);
+ui_print("Patching system image unconditionally...");
+package_extract_file("system.img", "/dev/block/by-name/system");
+show_progress(0.100000, 0);
+ui_print("Patching vendor image unconditionally...");
+block_image_update("/dev/block/by-name/vendor", package_extract_file("vendor.transfer.list"), "vendor.new.dat.br", "vendor.patch.dat") ||
+  abort("E2001: Failed to update vendor image.");
+show_progress(0.100000, 0);
+ui_print("Patching oem image unconditionally...");
+block_image_update("/dev/block/by-name/oem", package_extract_file("oem.transfer.list"), "oem.new.dat.br", "oem.patch.dat") ||
+  abort("E2001: Failed to update oem image.");
+show_progress(0.050000, 5);
+package_extract_file("boot.img", "/dev/block/by-name/boot");
+show_progress(0.200000, 10);
+ui_print("Writing trust img...");
+package_extract_file("trust.img", "/dev/block/by-name/trust");
+ui_print("Writing uboot loader img...");
+package_extract_file("uboot.img", "/dev/block/by-name/uboot");
+set_progress(1.000000);
