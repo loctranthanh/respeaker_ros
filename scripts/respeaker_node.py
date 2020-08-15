@@ -19,6 +19,8 @@ from audio_common_msgs.msg import AudioData
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool, Int32, ColorRGBA
 from dynamic_reconfigure.server import Server
+import snowboydetect
+from ctypes import *
 try:
     from pixel_ring import usb_pixel_ring_v2
 except IOError as e:
@@ -31,6 +33,9 @@ except Exception as e:
     print e
     raise RuntimeError("Need to run respeaker_gencfg.py first")
 
+TOP_DIR = os.path.dirname(os.path.abspath(__file__))
+RESOURCE_FILE = os.path.join(TOP_DIR, "resources/common.res")
+MODEL_FILE = os.path.join(TOP_DIR, "resources/models/jarvis.umdl")
 
 # suppress error messages from ALSA
 # https://stackoverflow.com/questions/7088672/pyaudio-working-but-spits-out-error-messages-each-time
@@ -119,7 +124,7 @@ class RespeakerInterface(object):
         self.pixel_ring = usb_pixel_ring_v2.PixelRing(self.dev)
         self.set_led_think()
         time.sleep(10)  # it will take 10 seconds to re-recognize as audio device
-        self.set_led_trace()
+        self.set_led_off()
         rospy.loginfo("Respeaker device initialized (Version: %s)" % self.version)
 
     def __del__(self):
@@ -179,11 +184,19 @@ class RespeakerInterface(object):
         return result
 
     def set_led_think(self):
-        self.pixel_ring.set_brightness(10)
+        self.pixel_ring.set_brightness(5)
         self.pixel_ring.think()
+    
+    def set_led_listen(self):
+        self.pixel_ring.set_brightness(10)
+        self.pixel_ring.listen()
+    
+    def set_led_off(self):
+        self.pixel_ring.set_brightness(0)
+        self.pixel_ring.listen()
 
     def set_led_trace(self):
-        self.pixel_ring.set_brightness(20)
+        self.pixel_ring.set_brightness(brightness)
         self.pixel_ring.trace()
 
     def set_led_color(self, r, g, b, a):
@@ -214,14 +227,20 @@ class RespeakerInterface(object):
 
 
 class RespeakerAudio(object):
-    def __init__(self, on_audio, channels=None, suppress_error=True):
+    def __init__(self,
+                 on_audio,
+                 channels=None,
+                 suppress_error=True,
+                 format=pyaudio.paInt16,
+                 rate=16000,
+                 device_index=None):
         self.on_audio = on_audio
         with ignore_stderr(enable=suppress_error):
             self.pyaudio = pyaudio.PyAudio()
         self.available_channels = None
         self.channels = channels
-        self.device_index = None
-        self.rate = 16000
+        self.device_index = device_index
+        self.rate = rate
         self.bitwidth = 2
         self.bitdepth = 16
 
@@ -300,21 +319,44 @@ class RespeakerAudio(object):
 
 
 class RespeakerNode(object):
-    def __init__(self):
+    def __init__(self, decoder_model=MODEL_FILE,
+                 resource=RESOURCE_FILE,
+                 sensitivity=[0.75, 0.75],
+                 audio_gain=1,
+                 apply_frontend=True):
         rospy.on_shutdown(self.on_shutdown)
         self.update_rate = rospy.get_param("~update_rate", 10.0)
         self.sensor_frame_id = rospy.get_param("~sensor_frame_id", "respeaker_base")
         self.doa_xy_offset = rospy.get_param("~doa_xy_offset", 0.0)
         self.doa_yaw_offset = rospy.get_param("~doa_yaw_offset", 90.0)
         self.speech_prefetch = rospy.get_param("~speech_prefetch", 0.5)
-        self.speech_continuation = rospy.get_param("~speech_continuation", 0.5)
+        self.speech_continuation = rospy.get_param("~speech_continuation", 0.8)
         self.speech_max_duration = rospy.get_param("~speech_max_duration", 7.0)
         self.speech_min_duration = rospy.get_param("~speech_min_duration", 0.1)
         self.main_channel = rospy.get_param('~main_channel', 0)
         suppress_pyaudio_error = rospy.get_param("~suppress_pyaudio_error", True)
         #
+
+        tm = type(decoder_model)
+        ts = type(sensitivity)
+        if tm is not list:
+            decoder_model = [decoder_model]
+        if ts is not list:
+            sensitivity = [sensitivity]
+        model_str = ",".join(decoder_model)
+        self.detector = snowboydetect.SnowboyDetect(
+            resource_filename=resource.encode(), model_str=model_str.encode())
+
+        self.detector.SetAudioGain(audio_gain)
+        self.detector.ApplyFrontend(apply_frontend)
+        self.num_hotwords = self.detector.NumHotwords()
+
         self.respeaker = RespeakerInterface()
-        self.respeaker_audio = RespeakerAudio(self.on_audio, suppress_error=suppress_pyaudio_error)
+        self.respeaker_audio = RespeakerAudio(self.on_audio,
+                                              suppress_error=suppress_pyaudio_error,
+                                              format=pyaudio.get_format_from_width(self.detector.BitsPerSample() / 8),
+                                              rate=self.detector.SampleRate(),
+                                              )
         self.speech_audio_buffer = str()
         self.is_speeching = False
         self.speech_stopped = rospy.Time(0)
@@ -339,6 +381,13 @@ class RespeakerNode(object):
                                       self.on_timer)
         self.timer_led = None
         self.sub_led = rospy.Subscriber("status_led", ColorRGBA, self.on_status_led)
+        self.is_active = False
+        self.wait_command_count = 0
+        self.wait_command_thres = 50
+
+        self.is_waiting_response = False
+        self.wait_response_count = 0
+        self.wait_response_thres = 100
 
     def on_shutdown(self):
         try:
@@ -396,6 +445,18 @@ class RespeakerNode(object):
             doa_rad, math.radians(self.doa_yaw_offset))
         doa = math.degrees(doa_rad)
 
+        if self.is_active:
+            self.wait_command_count += 1
+            if self.wait_command_count > self.wait_command_thres:
+                self.is_active = False
+                self.respeaker.set_led_off()
+        
+        if self.is_waiting_response:
+            self.wait_response_count += 1
+            if (self.wait_response_count > self.wait_response_thres):
+                self.is_waiting_response = False
+                self.respeaker.set_led_off()
+
         # vad
         # if is_voice != self.prev_is_voice:
         #     self.pub_vad.publish(Bool(data=is_voice))
@@ -430,9 +491,24 @@ class RespeakerNode(object):
             duration = 8.0 * len(buf) * self.respeaker_audio.bitwidth
             duration = duration / self.respeaker_audio.rate / self.respeaker_audio.bitdepth
             rospy.loginfo("Speech detected for %.3f seconds" % duration)
-            if self.speech_min_duration <= duration < self.speech_max_duration:
+            status = self.detector.RunDetection(buf)
+            if (status > 0):
+                print("found kws")
+                self.is_active = True
+                self.wait_command_count = 0
+                self.respeaker.set_led_listen()
+                return
+            else:
+                print("not kws")
+                # self.respeaker.set_led_trace()
+            if (self.is_active):
+                self.is_active = False
+                if self.speech_min_duration <= duration < self.speech_max_duration:
+                    self.respeaker.set_led_think()
+                    self.is_waiting_response = True
+                    self.wait_response_count = 0
+                    self.pub_speech_audio.publish(AudioData(data=buf))
 
-                self.pub_speech_audio.publish(AudioData(data=buf))
 
 
 if __name__ == '__main__':
